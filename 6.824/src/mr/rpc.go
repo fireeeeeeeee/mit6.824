@@ -32,14 +32,24 @@ const (
 	NONEOP   OP = 3
 )
 
+type FileReduceID struct {
+	FILENAME string
+	REDUCEID int
+}
+
 type WorkRequest struct {
 	FILENAME  string
 	REQUESTOP OP
+	FR        []FileReduceID
 }
 
 type WorkReply struct {
-	FILENAME string
-	REPLYOP  OP
+	FILENAME    string
+	NREDUCE     int
+	REDUCEID    int
+	REDUCEFILES []string
+	MAPID       int
+	REPLYOP     OP
 }
 
 // Add your RPC definitions here.
