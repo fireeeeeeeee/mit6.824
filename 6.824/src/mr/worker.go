@@ -53,7 +53,6 @@ func Worker(mapf func(string, string) []KeyValue,
 		switch wReply.REPLYOP {
 		case MAPOP:
 			{
-
 				filename := wReply.FILENAME
 				file, err := os.Open(filename)
 				if err != nil {
@@ -96,14 +95,12 @@ func Worker(mapf func(string, string) []KeyValue,
 					wRequest.FR = append(wRequest.FR, FileReduceID{onames[i], i})
 				}
 				wRequest.FILENAME = filename
-				fmt.Println(filename)
 			}
 		case REDUCEOP:
 			{
 				ifileNames := wReply.REDUCEFILES
 				reduceID := wReply.REDUCEID
 				oname := "mr-out-" + strconv.Itoa(reduceID)
-				fmt.Println("id:%v", reduceID)
 				ofile, err := os.Create(oname)
 				if err != nil {
 					//TODO:handle map too long
@@ -145,7 +142,7 @@ func Worker(mapf func(string, string) []KeyValue,
 					i = j
 				}
 				ofile.Close()
-				fmt.Println("id:%v", reduceID)
+
 			}
 		case NONEOP:
 			{

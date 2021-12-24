@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -35,13 +36,14 @@ type Master struct {
 	nReduce               int
 	unprocessFileNames    []string
 	fileNames             []string
-	processingFiles       list.List
+	processingFiles       *list.List
 	fileStates            map[string]*FileState
 	reduceID              int
 	mapID                 int
 	reduceSuccessCnt      int
 	intermediateFileNames [][]string
-	mutex                 sync.Mutex
+	reduceMutex           sync.Mutex
+	mapMutex              sync.Mutex
 }
 
 func GetTime() int64 {
@@ -69,6 +71,7 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 	case MAPOP:
 		{
 			name := wrequest.FILENAME
+			m.mapMutex.Lock()
 			switch m.fileStates[name].state {
 			case PROCESSING:
 				{
@@ -76,21 +79,26 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 					element := m.fileStates[name].prcessingElement
 					m.processingFiles.Remove(element)
 				}
+			case CONSUMED:
+				{
+					fmt.Println("one map task failed before , handling %v", name)
+				}
 			default:
 				{
 					log.Fatal("wrong file state")
 				}
 			}
+			m.mapMutex.Unlock()
 			for _, FR := range wrequest.FR {
 				m.intermediateFileNames[FR.REDUCEID] = append(m.intermediateFileNames[FR.REDUCEID], FR.FILENAME)
 			}
 		}
 	case REDUCEOP:
 		{
-			m.mutex.Lock()
+			m.reduceMutex.Lock()
 			m.reduceSuccessCnt++
 
-			m.mutex.Unlock()
+			m.reduceMutex.Unlock()
 		}
 	case NONEOP:
 		{
@@ -104,20 +112,39 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 
 	if len(m.unprocessFileNames) != 0 {
 		name := m.unprocessFileNames[0]
+		m.mapMutex.Lock()
 		m.unprocessFileNames = m.unprocessFileNames[1:]
 		element := m.processingFiles.PushBack(ProcessingFile{name, GetTime()})
 		m.fileStates[name] = &FileState{PROCESSING, element}
-
 		wreply.FILENAME = name
 		wreply.REPLYOP = MAPOP
 		wreply.NREDUCE = m.nReduce
 		wreply.MAPID = m.mapID
 		m.mapID++
+		m.mapMutex.Unlock()
 	} else if m.processingFiles.Len() != 0 {
 		// waiting to reduce
-		wreply.REPLYOP = NONEOP
+		m.mapMutex.Lock()
+		top := m.processingFiles.Front().Value.(ProcessingFile)
+		if DecTime(top.beginTime) >= 10 {
+			name := top.name
+			m.processingFiles.Remove(m.processingFiles.Front())
+			element := m.processingFiles.PushBack(ProcessingFile{name, GetTime()})
+			m.fileStates[name] = &FileState{PROCESSING, element}
+			wreply.FILENAME = name
+			wreply.REPLYOP = MAPOP
+			wreply.NREDUCE = m.nReduce
+			wreply.MAPID = m.mapID
+			m.mapID++
+		} else {
+			wreply.REPLYOP = NONEOP
+		}
+		m.mapMutex.Unlock()
 	} else {
 		//reduce
+		if m.reduceID == 0 {
+			fmt.Println("map task all done!")
+		}
 		if m.reduceID != m.nReduce {
 			wreply.REDUCEID = m.reduceID
 			wreply.REPLYOP = REDUCEOP
@@ -179,7 +206,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	}
 	m.unprocessFileNames = files
 	m.fileNames = files
-	m.processingFiles = *list.New()
+	m.processingFiles = list.New()
 	m.reduceID = 0
 	m.reduceSuccessCnt = 0
 	m.fileStates = make(map[string]*FileState)
