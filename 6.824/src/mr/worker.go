@@ -47,6 +47,8 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	wRequest := WorkRequest{REQUESTOP: NONEOP}
 	wReply := WorkReply{}
+
+MAINLOOP:
 	for {
 		call("Master.Request", &wRequest, &wReply)
 		wRequest.REQUESTOP = wReply.REPLYOP
@@ -100,12 +102,7 @@ func Worker(mapf func(string, string) []KeyValue,
 			{
 				ifileNames := wReply.REDUCEFILES
 				reduceID := wReply.REDUCEID
-				oname := "mr-out-" + strconv.Itoa(reduceID)
-				ofile, err := os.Create(oname)
-				if err != nil {
-					//TODO:handle map too long
-					log.Fatal("have some file %v", err)
-				}
+
 				kva := []KeyValue{}
 				for _, ifileName := range ifileNames {
 					file, err := os.Open(ifileName)
@@ -126,6 +123,30 @@ func Worker(mapf func(string, string) []KeyValue,
 
 				sort.Sort(ByKey(kva))
 
+				oname := "mr-out-" + strconv.Itoa(reduceID)
+				var onametemp string
+
+				var ofile *os.File
+				trycnt := 0
+				for i := 0; i < 10; i++ {
+					trycnt++
+					ot := oname + strconv.Itoa(i) + ".temp"
+					if _, err := os.Stat(ot); err == nil {
+						//file exsist
+					} else {
+						var errCreate error
+						ofile, errCreate = os.Create(ot)
+						if errCreate != nil {
+							log.Fatalf("err in create file :%v", errCreate)
+						}
+						onametemp = ot
+						break
+					}
+				}
+				if trycnt == 10 {
+					log.Fatalf("trycnt reach max 10")
+				}
+
 				i := 0
 				for i < len(kva) {
 					j := i + 1
@@ -142,12 +163,26 @@ func Worker(mapf func(string, string) []KeyValue,
 					i = j
 				}
 				ofile.Close()
-
+				if _, err := os.Stat(oname); err == nil {
+					//file exsist
+					fmt.Println("reduce task overtime")
+				} else {
+					errRename := os.Rename(onametemp, oname)
+					if errRename != nil {
+						log.Fatalf("error in rename %v", errRename)
+					}
+				}
+				wRequest.FILENAME = strconv.Itoa(reduceID)
 			}
 		case NONEOP:
 			{
 				time.Sleep(time.Second)
 
+			}
+		case ENDOP:
+			{
+				fmt.Println("worker done")
+				break MAINLOOP
 			}
 		default:
 			{

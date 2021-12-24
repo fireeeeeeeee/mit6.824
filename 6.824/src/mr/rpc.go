@@ -30,6 +30,7 @@ const (
 	MAPOP    OP = 1
 	REDUCEOP OP = 2
 	NONEOP   OP = 3
+	ENDOP    OP = 4
 )
 
 type FileReduceID struct {

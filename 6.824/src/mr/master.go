@@ -7,27 +7,24 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
-	"container/list"
+	"../mytools/linkedmap"
 )
 
-//file state
+//task states
 const (
-	UNPROCESSING int = 1
-	PROCESSING   int = 2
-	CONSUMED     int = 3
+	WAITING int = 1
+	WORKING int = 2
+	END     int = 3
 )
 
-type ProcessingFile struct {
+type TaskState struct {
 	name      string
 	beginTime int64
-}
-
-type FileState struct {
-	state            int
-	prcessingElement *list.Element
+	state     int
 }
 
 type Master struct {
@@ -36,14 +33,14 @@ type Master struct {
 	nReduce               int
 	unprocessFileNames    []string
 	fileNames             []string
-	processingFiles       *list.List
-	fileStates            map[string]*FileState
 	reduceID              int
 	mapID                 int
 	reduceSuccessCnt      int
 	intermediateFileNames [][]string
 	reduceMutex           sync.Mutex
 	mapMutex              sync.Mutex
+	mapTasks              *linkedmap.LinkMap
+	reduceTasks           *linkedmap.LinkMap
 }
 
 func GetTime() int64 {
@@ -72,16 +69,20 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 		{
 			name := wrequest.FILENAME
 			m.mapMutex.Lock()
-			switch m.fileStates[name].state {
-			case PROCESSING:
+			mState := m.mapTasks.GetItem(name).Value.(*TaskState)
+			switch mState.state {
+			case WAITING:
 				{
-					m.fileStates[name].state = CONSUMED
-					element := m.fileStates[name].prcessingElement
-					m.processingFiles.Remove(element)
+					log.Fatalf("I haven't set this state")
 				}
-			case CONSUMED:
+			case WORKING:
 				{
-					fmt.Println("one map task failed before , handling %v", name)
+					mState.state = END
+					m.mapTasks.RemoveByKey(name)
+				}
+			case END:
+				{
+					fmt.Println("this map task overtime before , handling %v", name)
 				}
 			default:
 				{
@@ -96,13 +97,38 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 	case REDUCEOP:
 		{
 			m.reduceMutex.Lock()
-			m.reduceSuccessCnt++
+			name := wrequest.FILENAME
+			rState := m.reduceTasks.GetItem(name).Value.(*TaskState)
+			switch rState.state {
+			case WAITING:
+				{
+					log.Fatalf("I haven't set this state")
+				}
+			case WORKING:
+				{
+					m.reduceSuccessCnt++
+					rState.state = END
+					m.reduceTasks.RemoveByKey(name)
+				}
+			case END:
+				{
+					fmt.Println("this reduce task overtime before , handling %v", name)
+				}
+			default:
+				{
+					log.Fatal("wrong file state")
+				}
+			}
 
 			m.reduceMutex.Unlock()
 		}
 	case NONEOP:
 		{
 
+		}
+	case ENDOP:
+		{
+			fmt.Println("I think never will be here")
 		}
 	default:
 		{
@@ -114,23 +140,24 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 		name := m.unprocessFileNames[0]
 		m.mapMutex.Lock()
 		m.unprocessFileNames = m.unprocessFileNames[1:]
-		element := m.processingFiles.PushBack(ProcessingFile{name, GetTime()})
-		m.fileStates[name] = &FileState{PROCESSING, element}
+
+		m.mapTasks.Insert(name, &TaskState{name, GetTime(), WORKING})
+
 		wreply.FILENAME = name
 		wreply.REPLYOP = MAPOP
 		wreply.NREDUCE = m.nReduce
 		wreply.MAPID = m.mapID
 		m.mapID++
 		m.mapMutex.Unlock()
-	} else if m.processingFiles.Len() != 0 {
+	} else if m.mapTasks.Len() != 0 {
 		// waiting to reduce
 		m.mapMutex.Lock()
-		top := m.processingFiles.Front().Value.(ProcessingFile)
+		top := m.mapTasks.Front().Value.(*TaskState)
+
 		if DecTime(top.beginTime) >= 10 {
 			name := top.name
-			m.processingFiles.Remove(m.processingFiles.Front())
-			element := m.processingFiles.PushBack(ProcessingFile{name, GetTime()})
-			m.fileStates[name] = &FileState{PROCESSING, element}
+			m.mapTasks.RemoveByKey(name)
+			m.mapTasks.Insert(name, &TaskState{name, GetTime(), WORKING})
 			wreply.FILENAME = name
 			wreply.REPLYOP = MAPOP
 			wreply.NREDUCE = m.nReduce
@@ -146,16 +173,32 @@ func (m *Master) Request(wrequest *WorkRequest, wreply *WorkReply) error {
 			fmt.Println("map task all done!")
 		}
 		if m.reduceID != m.nReduce {
+			name := strconv.Itoa(m.reduceID)
+			m.reduceTasks.Insert(name, &TaskState{name, GetTime(), WORKING})
 			wreply.REDUCEID = m.reduceID
 			wreply.REPLYOP = REDUCEOP
 			wreply.REDUCEFILES = m.intermediateFileNames[m.reduceID]
 			m.reduceID++
-		} else {
-			//TODO: check long tail reduce task
-			//let worker wait now
-			wreply.REPLYOP = NONEOP
-		}
+		} else if m.reduceTasks.Len() != 0 {
+			top := m.reduceTasks.Front().Value.(*TaskState)
+			if DecTime(top.beginTime) >= 10 {
+				name := top.name
+				m.reduceTasks.RemoveByKey(name)
+				m.reduceTasks.Insert(name, &TaskState{name, GetTime(), WORKING})
+				var err error
+				wreply.REDUCEID, err = strconv.Atoi(name)
+				if err != nil {
+					log.Fatalf("can't convert reduceid %v", name)
+				}
+				wreply.REPLYOP = REDUCEOP
+				wreply.REDUCEFILES = m.intermediateFileNames[wreply.REDUCEID]
+			} else {
+				wreply.REPLYOP = NONEOP
+			}
 
+		} else {
+			wreply.REPLYOP = ENDOP
+		}
 	}
 
 	return nil
@@ -206,13 +249,10 @@ func MakeMaster(files []string, nReduce int) *Master {
 	}
 	m.unprocessFileNames = files
 	m.fileNames = files
-	m.processingFiles = list.New()
 	m.reduceID = 0
 	m.reduceSuccessCnt = 0
-	m.fileStates = make(map[string]*FileState)
-	for _, name := range files {
-		m.fileStates[name] = &FileState{UNPROCESSING, nil}
-	}
+	m.mapTasks = linkedmap.New()
+	m.reduceTasks = linkedmap.New()
 	m.server()
 	return &m
 }
