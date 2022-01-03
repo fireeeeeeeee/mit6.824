@@ -1,28 +1,28 @@
 package main
 
 import (
-	"container/list"
 	"fmt"
-	"os"
+	"sync"
 )
 
-type Node struct {
-	val int
+var a string
+var once sync.Once
+
+func setup() {
+	a = "hello, world"
 }
 
-func Add(l *list.List) {
-	l.PushBack(&Node{1})
+func doprint() {
+	once.Do(setup)
+	fmt.Println(a)
+}
+
+func twoprint() {
+	go doprint()
+	go doprint()
+
 }
 
 func main() {
-
-	l := list.New()
-	Add(l)
-	n := l.Front().Value.(*Node)
-	n.val++
-	n2 := l.Front().Value.(*Node)
-	fmt.Println(n2)
-	_, err := os.Create("test.go")
-	os.Stat()
-	fmt.Println(err)
+	twoprint()
 }
