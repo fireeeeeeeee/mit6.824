@@ -23,6 +23,27 @@ func twoprint() {
 
 }
 
+var ch chan int
+
+func insert() {
+	for i := 0; i < 10; i++ {
+		ch <- i
+	}
+	fmt.Println("insert finish")
+}
+
+func output() {
+	for i := 0; i < 10; i++ {
+		fmt.Println(<-ch)
+
+	}
+}
+
+type A struct {
+	a []int
+}
+
 func main() {
-	twoprint()
+	s := A{a: []int{5, 6}}
+	fmt.Println(s.a)
 }

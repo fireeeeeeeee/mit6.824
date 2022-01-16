@@ -51,6 +51,7 @@ func TestInitialElection2A(t *testing.T) {
 }
 
 func TestReElection2A(t *testing.T) {
+	//time.Sleep(2 * RaftElectionTimeout)
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -72,7 +73,9 @@ func TestReElection2A(t *testing.T) {
 	// be elected.
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
+	fmt.Println("------1")
 	time.Sleep(2 * RaftElectionTimeout)
+	fmt.Println("-----2")
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
@@ -155,13 +158,14 @@ func TestFailAgree2B(t *testing.T) {
 
 	// disconnect one follower from the network.
 	leader := cfg.checkOneLeader()
+	//fmt.Println(leader)
 	cfg.disconnect((leader + 1) % servers)
-
 	// the leader and remaining follower should be
 	// able to agree despite the disconnected follower.
 	cfg.one(102, servers-1, false)
 	cfg.one(103, servers-1, false)
 	time.Sleep(RaftElectionTimeout)
+	fmt.Println("-----")
 	cfg.one(104, servers-1, false)
 	cfg.one(105, servers-1, false)
 
