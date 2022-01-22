@@ -45,5 +45,5 @@ type A struct {
 
 func main() {
 	s := A{a: []int{5, 6}}
-	fmt.Println(s.a)
+	fmt.Println(s.a[-1])
 }
