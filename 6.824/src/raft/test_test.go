@@ -786,13 +786,17 @@ func TestFigure8Unreliable2C(t *testing.T) {
 			cfg.setlongreordering(true)
 		}
 		leader := -1
+		cnt := 0
 		for i := 0; i < servers; i++ {
 			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
 			if ok && cfg.connected[i] {
 				leader = i
+				cnt++
 			}
 		}
-
+		if cnt > 1 {
+			fmt.Println(cnt)
+		}
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)

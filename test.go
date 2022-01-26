@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"sync"
 )
 
@@ -43,7 +44,16 @@ type A struct {
 	a []int
 }
 
+func fun() {
+
+	defer fmt.Println(1)
+	defer fmt.Println(2)
+}
+
 func main() {
-	s := A{a: []int{5, 6}}
-	fmt.Println(s.a[-1])
+	for i := 0; i < 100; i++ {
+		ms := 200 + rand.Intn(1+rand.Intn(2000))
+		fmt.Println(ms)
+	}
+
 }
