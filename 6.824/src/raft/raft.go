@@ -93,13 +93,15 @@ func DecTime(t int64) int64 {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if rf.state == 0 {
 		return rf.currentTerm, false
 	}
 	cTimes := make([]int64, len(rf.peers))
 	copy(cTimes, rf.lastCommunicateTime)
 	beginTime := GetTime()
-	rf.mu.Lock()
+
 	for rf.state == 2 {
 		cnt := 1
 		n := len(rf.peers)
@@ -119,7 +121,6 @@ func (rf *Raft) GetState() (int, bool) {
 		time.Sleep(10 * time.Millisecond)
 		rf.mu.Lock()
 	}
-	rf.mu.Unlock()
 	// Your code here (2A).
 	return rf.currentTerm, rf.state == 2
 }
@@ -228,7 +229,7 @@ type AppendEntryReply struct {
 
 func (rf *Raft) flashTimeout() {
 
-	rf.electionTimeOut = GetTime() + int64(500+rand.Int()%500) //500ms~1000ms
+	rf.electionTimeOut = GetTime() + int64(1000+rand.Int()%1000) //500ms~1000ms
 	//fmt.Println(GetTime(), rf.electionTimeOut)
 }
 
@@ -262,6 +263,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.currentTerm = args.Term
 		rf.votedFor = -1
 		rf.state = 0
+		//fmt.Println("4--:", rf.me, rf.currentTerm)
 	}
 
 	if rf.votedFor == -1 && rf.UpToDate(args.LastLogTerm, args.LastLogIndex) {
@@ -282,7 +284,7 @@ func (rf *Raft) commitMsg(n int) {
 	for i := rf.commitedIndex; i < n; i++ {
 		msg := ApplyMsg{CommandValid: true, Command: rf.logs[i].Command, CommandIndex: i + 1}
 		rf.commited <- msg
-		fmt.Println(rf.me, rf.currentTerm, rf.logs[i].Term, rf.commitedIndex, msg)
+		// fmt.Println(rf.me, rf.state, rf.currentTerm, rf.logs[i].Term, rf.commitedIndex, msg)
 	}
 	if n > rf.commitedIndex {
 		rf.commitedIndex = n
@@ -300,6 +302,7 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
 	}
 
 	if args.Term > rf.currentTerm {
+		//fmt.Println("1--:", rf.me, rf.currentTerm)
 		rf.state = 0
 		rf.currentTerm = args.Term
 	}
@@ -327,7 +330,6 @@ func (rf *Raft) AppendEntries(args *AppendEntryArgs, reply *AppendEntryReply) {
 				}
 			}
 		}
-
 		rf.commitMsg(args.CommitIndex)
 	}
 	reply.Term = rf.currentTerm
@@ -380,9 +382,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *AppendEntryReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if reply.Term > rf.currentTerm {
-
 		rf.currentTerm = reply.Term
+		//fmt.Println("2--:", rf.me, rf.currentTerm)
 		rf.state = 0
 		rf.persist()
 	}
@@ -405,15 +409,17 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	idx := -1
 	term := rf.currentTerm
 	isLeader := rf.state == 2
 	if isLeader {
-		rf.mu.Lock()
+
 		rf.logs = append(rf.logs, LogEntry{Command: command, Term: term})
 		idx = len(rf.logs)
 		rf.persist()
-		rf.mu.Unlock()
+
 	}
 	//fmt.Println(rf.me, rf.currentTerm, rf.state)
 	return idx, term, isLeader
@@ -470,25 +476,29 @@ func (s IntSlice) Less(i, j int) bool { return s[i] < s[j] }
 func (rf *Raft) sendLog(peerIdx int) {
 	term := rf.currentTerm
 	for !rf.killed() && rf.state == 2 && rf.currentTerm == term {
+
 		n := len(rf.peers)
-		if rf.nextIndex[peerIdx] < len(rf.logs) {
+		nlogs := len(rf.logs)
+		if rf.nextIndex[peerIdx] < nlogs {
 			//fmt.Println(rf.nextIndex[peerIdx], len(rf.logs))
 			t := -1
 			if rf.nextIndex[peerIdx] > 0 {
 				t = rf.logs[rf.nextIndex[peerIdx]-1].Term
 			}
-			args := AppendEntryArgs{LerderID: rf.me, Term: rf.currentTerm, PrevLogIndex: rf.nextIndex[peerIdx] - 1, PrevLogTerm: t, Entry: []LogEntry{rf.logs[rf.nextIndex[peerIdx]]}, CommitIndex: rf.GetCommitIndex(peerIdx)}
+			args := AppendEntryArgs{LerderID: rf.me, Term: rf.currentTerm, PrevLogIndex: rf.nextIndex[peerIdx] - 1, PrevLogTerm: t, Entry: rf.logs[rf.nextIndex[peerIdx]:nlogs], CommitIndex: rf.GetCommitIndex(peerIdx)}
 			reply := AppendEntryReply{}
 			rf.sendAppendEntries(peerIdx, &args, &reply)
+
 			if reply.Success {
-				rf.nextIndex[peerIdx]++
+				rf.nextIndex[peerIdx] = nlogs
+				//rf.nextIndex[peerIdx]++
 				rf.matchedIndex[peerIdx] = rf.nextIndex[peerIdx]
 			} else {
-				//rf.nextIndex[peerIdx] = reply.AdviceIdx
+				rf.nextIndex[peerIdx] = reply.AdviceIdx
 
-				if rf.nextIndex[peerIdx] > 0 {
-					rf.nextIndex[peerIdx]--
-				}
+				// if rf.nextIndex[peerIdx] > 0 {
+				// 	rf.nextIndex[peerIdx]--
+				// }
 			}
 			//fmt.Println(rf.me, rf.nextIndex[peerIdx], peerIdx)
 			sortedMatchedIndex := make([]int, n)
@@ -496,6 +506,7 @@ func (rf *Raft) sendLog(peerIdx int) {
 			sort.Sort(IntSlice(sortedMatchedIndex))
 			//fmt.Println(sortedMatchedIndex, sortedMatchedIndex[1+n/2]-1)
 			rf.mu.Lock()
+
 			rf.commitMsg(sortedMatchedIndex[1+n/2])
 			rf.mu.Unlock()
 		}
@@ -504,7 +515,11 @@ func (rf *Raft) sendLog(peerIdx int) {
 }
 
 func (rf *Raft) elect() bool {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.currentTerm++
+	term := rf.currentTerm
 	//fmt.Println("elect:", rf.me, rf.currentTerm, GetTime())
 	n := len(rf.peers)
 	tickets := 1
@@ -512,6 +527,7 @@ func (rf *Raft) elect() bool {
 	rf.state = 1
 	rf.votedFor = rf.me
 	rf.persist()
+
 	for i := 0; i < n; i++ {
 		if i == rf.me {
 			continue
@@ -521,21 +537,22 @@ func (rf *Raft) elect() bool {
 		reply.VoteGranted = false
 		go rf.sendRequestVote(i, &args, &reply, &tickets, &done)
 	}
-
-	rf.mu.Lock()
 	for !(tickets > n/2 || n-1-done+tickets <= n/2) {
 		rf.mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 		rf.mu.Lock()
 	}
-	rf.mu.Unlock()
 
 	//fmt.Println(rf.currentTerm, rf.me, tickets)
-	if tickets > n/2 && rf.state == 1 {
-		rf.state = 2
-	} else {
-		rf.state = 0
+	if term == rf.currentTerm {
+		if tickets > n/2 && rf.state == 1 {
+			rf.state = 2
+		} else {
+			//fmt.Println("3--:", rf.me, rf.currentTerm)
+			rf.state = 0
+		}
 	}
+
 	return rf.state == 2
 }
 
@@ -560,7 +577,7 @@ func (rf *Raft) main() {
 		//fmt.Println(DecTime(rf.electionTimeOut), rf.me, rf.state)
 		if DecTime(rf.electionTimeOut) > 0 && rf.state == 0 {
 			if rf.elect() {
-				fmt.Println("new leader:", rf.me)
+				// fmt.Println("new leader:", rf.me)
 				rf.initElect()
 			} else {
 				rf.flashTimeout()
