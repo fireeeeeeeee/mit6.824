@@ -1,12 +1,14 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
 	"log"
-	"../raft"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	"../labgob"
+	"../labrpc"
+	"../raft"
 )
 
 const Debug = 0
@@ -18,11 +20,61 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
-
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OPType int
+}
+
+const (
+	GET       int = 1
+	PUTAPPEND int = 2
+)
+
+type myMap struct {
+	mu     sync.Mutex
+	target map[int]int
+	cnt    map[int]int
+}
+
+func (myMap *myMap) new() {
+	myMap.cnt = make(map[int]int)
+	myMap.target = make(map[int]int)
+}
+
+func (myMap *myMap) add(key int) {
+	myMap.mu.Lock()
+	myMap.cnt[key]++
+	myMap.mu.Unlock()
+}
+func (myMap *myMap) remove(key int) {
+	myMap.mu.Lock()
+	myMap.cnt[key]--
+	if myMap.cnt[key] == 0 {
+		delete(myMap.cnt, key)
+		delete(myMap.target, key)
+	}
+	myMap.mu.Unlock()
+}
+func (myMap *myMap) wait(key int) int {
+	myMap.mu.Lock()
+	for {
+		_, ok := myMap.target[key]
+		if ok {
+			break
+		}
+		myMap.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		myMap.mu.Lock()
+	}
+	myMap.mu.Unlock()
+	return myMap.target[key]
+}
+func (myMap *myMap) addTarget(key int, value int) {
+	myMap.mu.Lock()
+	myMap.target[key] = value
+	myMap.mu.Unlock()
 }
 
 type KVServer struct {
@@ -33,13 +85,12 @@ type KVServer struct {
 	dead    int32 // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
-
+	myMap        myMap
 	// Your definitions here.
 }
 
-
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	// Your code here.-
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -94,7 +145,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
+	kv.myMap.new()
 	// You may need initialization code here.
 
 	return kv

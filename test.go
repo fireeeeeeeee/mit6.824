@@ -1,59 +1,37 @@
 package main
 
 import (
-	"fmt"
-	"math/rand"
 	"sync"
 )
 
-var a string
-var once sync.Once
-
-func setup() {
-	a = "hello, world"
+type myMap struct {
+	mu sync.Mutex
+	ma map[int]int
 }
 
-func doprint() {
-	once.Do(setup)
-	fmt.Println(a)
+func (myMap *myMap) new() {
+	myMap.ma = make(map[int]int)
 }
 
-func twoprint() {
-	go doprint()
-	go doprint()
-
+func (myMap *myMap) add(key int) {
+	myMap.mu.Lock()
+	myMap.ma[key]++
+	myMap.mu.Unlock()
 }
 
-var ch chan int
-
-func insert() {
-	for i := 0; i < 10; i++ {
-		ch <- i
+func (myMap *myMap) remove(key int) {
+	myMap.mu.Lock()
+	myMap.ma[key]--
+	if myMap.ma[key] == 0 {
+		delete(myMap.ma, key)
 	}
-	fmt.Println("insert finish")
+	myMap.mu.Unlock()
 }
 
-func output() {
-	for i := 0; i < 10; i++ {
-		fmt.Println(<-ch)
-
-	}
-}
-
-type A struct {
-	a []int
-}
-
-func fun() {
-
-	defer fmt.Println(1)
-	defer fmt.Println(2)
+type kvserver struct {
+	myMap myMap
 }
 
 func main() {
-	for i := 0; i < 100; i++ {
-		ms := 200 + rand.Intn(1+rand.Intn(2000))
-		fmt.Println(ms)
-	}
 
 }
