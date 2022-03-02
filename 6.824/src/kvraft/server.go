@@ -37,6 +37,7 @@ type Op struct {
 
 type rpcResult struct {
 	Value   string
+	Status  string
 	Me      int
 	RpcID   int
 	ClerkID int
@@ -106,12 +107,16 @@ type KVServer struct {
 	// Your definitions here.
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	var result rpcResult
-	result, has := kv.ckAnswer[args.ClerkID]
-	fmt.Println(kv.me, args.ClerkID, args.RpcID, args.Key)
-	if has && result.RpcID == args.RpcID {
-		//result in cache
+type myReply struct {
+	Err   Err
+	Value string
+}
+
+func (kv *KVServer) handleOPs(op Op) myReply {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	reply := myReply{}
+	handleResult := func(result *rpcResult) {
 		if result.Value == "" {
 			reply.Err = ErrNoKey
 			reply.Value = ""
@@ -119,54 +124,57 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 			reply.Err = OK
 			reply.Value = result.Value
 		}
-	} else {
+	}
 
-		op := Op{Key: args.Key, Op: "Get", Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
+	var result rpcResult
+	result, has := kv.ckAnswer[op.ClerkID]
+	// fmt.Println(kv.me, op.ClerkID, op.RpcID, op.Op, result.Status, has)
+	if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
+		//result in cache
+		handleResult(&result)
+	} else if has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
+		reply.Err = Waiting
+	} else {
 		index, _, isLeader := kv.rf.Start(op)
+
 		if !isLeader {
 			reply.Err = ErrWrongLeader
-			return
-		}
-		kv.myMap.add(index)
-		result := kv.myMap.wait(index)
-		if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
-			reply.Err = ErrWrongLeader
 		} else {
-			if result.Value == "" {
-				reply.Err = ErrNoKey
-				reply.Value = ""
+			fmt.Println(kv.me, op.ClerkID, op.RpcID, op.Op, result.Status, has)
+			kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsuming"}
+			kv.mu.Unlock()
+			kv.myMap.add(index)
+			result := kv.myMap.wait(index)
+			kv.mu.Lock()
+			if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
+				reply.Err = ErrWrongLeader
+				kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsume Fail"}
 			} else {
-				reply.Err = OK
-				reply.Value = result.Value
+				handleResult(&result)
 			}
+			kv.myMap.remove(index)
 		}
-		kv.myMap.remove(index)
 	}
+
+	return reply
+}
+
+func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	op := Op{Key: args.Key, Op: "Get", Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
+	myReply := kv.handleOPs(op)
+	reply.Err = myReply.Err
+	reply.Value = myReply.Value
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	var result rpcResult
-	result, has := kv.ckAnswer[args.ClerkID]
-	if has && result.RpcID == args.RpcID {
+	op := Op{Key: args.Key, Value: args.Value, Op: args.Op, Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
+	myReply := kv.handleOPs(op)
+	reply.Err = myReply.Err
+	if reply.Err == ErrNoKey {
 		reply.Err = OK
-	} else {
-		op := Op{Key: args.Key, Value: args.Value, Op: args.Op, Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
-		index, _, isLeader := kv.rf.Start(op)
-		if !isLeader {
-			reply.Err = ErrWrongLeader
-			return
-		}
-
-		kv.myMap.add(index)
-		result = kv.myMap.wait(index)
-		if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
-			reply.Err = ErrWrongLeader
-		} else {
-			reply.Err = OK
-		}
-		kv.myMap.remove(index)
 	}
+
 }
 
 //
@@ -191,6 +199,9 @@ func (kv *KVServer) killed() bool {
 }
 
 func (kv *KVServer) step(op Op) string {
+	if op.Op == "Emp" {
+		return ""
+	}
 	if op.Op == "Append" {
 		kv.state[op.Key] += op.Value
 	} else if op.Op == "Put" {
@@ -212,12 +223,21 @@ func (kv *KVServer) read() {
 		op := msg.Command.(Op)
 		value := kv.step(op)
 		index := msg.CommandIndex
-		rpcResult := rpcResult{Value: value, RpcID: op.RpcID, ClerkID: op.ClerkID, Me: op.Me}
-		if op.ClerkID != -1 {
-			kv.ckAnswer[op.ClerkID] = rpcResult
-		}
+		rpcResult := rpcResult{Value: value, RpcID: op.RpcID, ClerkID: op.ClerkID, Me: op.Me, Status: "Finish"}
+
+		kv.ckAnswer[op.ClerkID] = rpcResult
 		kv.myMap.addTarget(index, rpcResult)
 		kv.mu.Unlock()
+	}
+}
+
+func (kv *KVServer) heartBeat() {
+	for {
+
+		op := Op{Op: "Emp", RpcID: -1, ClerkID: -2}
+		kv.rf.Start(op)
+
+		time.Sleep(time.Millisecond * 100)
 	}
 }
 
@@ -253,6 +273,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.ckCount = 0
 	kv.myMap.new()
 	go kv.read()
+	go kv.heartBeat()
 	// You may need initialization code here.
 
 	return kv

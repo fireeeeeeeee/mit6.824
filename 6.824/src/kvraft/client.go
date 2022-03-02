@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"time"
 
 	"../labrpc"
 )
@@ -70,6 +71,8 @@ func (ck *Clerk) Get(key string) string {
 				return reply.Value
 			} else if reply.Err == ErrNoKey {
 				return ""
+			} else if reply.Err == Waiting {
+				time.Sleep(time.Millisecond * 100)
 			}
 
 		}
@@ -100,6 +103,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		if ok {
 			if reply.Err == OK {
 				return
+			} else if reply.Err == Waiting {
+				time.Sleep(time.Millisecond * 100)
 			}
 		}
 	}
