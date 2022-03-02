@@ -1,37 +1,31 @@
 package main
 
 import (
-	"sync"
+	"fmt"
+	"time"
 )
 
-type myMap struct {
-	mu sync.Mutex
-	ma map[int]int
-}
-
-func (myMap *myMap) new() {
-	myMap.ma = make(map[int]int)
-}
-
-func (myMap *myMap) add(key int) {
-	myMap.mu.Lock()
-	myMap.ma[key]++
-	myMap.mu.Unlock()
-}
-
-func (myMap *myMap) remove(key int) {
-	myMap.mu.Lock()
-	myMap.ma[key]--
-	if myMap.ma[key] == 0 {
-		delete(myMap.ma, key)
+func read(ch chan int) {
+	for data := range ch {
+		fmt.Println(data)
 	}
-	myMap.mu.Unlock()
+	fmt.Println("break")
 }
 
-type kvserver struct {
-	myMap myMap
+func write(ch chan int) {
+
+	for i := 0; i < 10; i++ {
+		if i%10 == 0 {
+			time.Sleep(time.Millisecond * 1000)
+		}
+		ch <- i
+	}
 }
 
 func main() {
+	ma := make(map[int]int)
+	ma[0] = 0
+	a, b := ma[0]
+	fmt.Println(a, b)
 
 }

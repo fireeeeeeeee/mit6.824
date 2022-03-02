@@ -1,7 +1,9 @@
 package kvraft
 
 import (
+	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,23 +26,31 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	OPType int
+	Key   string
+	Value string
+	Op    string
+
+	Me      int
+	RpcID   int
+	ClerkID int
 }
 
-const (
-	GET       int = 1
-	PUTAPPEND int = 2
-)
+type rpcResult struct {
+	Value   string
+	Me      int
+	RpcID   int
+	ClerkID int
+}
 
 type myMap struct {
 	mu     sync.Mutex
-	target map[int]int
+	target map[int]rpcResult
 	cnt    map[int]int
 }
 
 func (myMap *myMap) new() {
 	myMap.cnt = make(map[int]int)
-	myMap.target = make(map[int]int)
+	myMap.target = make(map[int]rpcResult)
 }
 
 func (myMap *myMap) add(key int) {
@@ -57,7 +67,7 @@ func (myMap *myMap) remove(key int) {
 	}
 	myMap.mu.Unlock()
 }
-func (myMap *myMap) wait(key int) int {
+func (myMap *myMap) wait(key int) rpcResult {
 	myMap.mu.Lock()
 	for {
 		_, ok := myMap.target[key]
@@ -71,30 +81,92 @@ func (myMap *myMap) wait(key int) int {
 	myMap.mu.Unlock()
 	return myMap.target[key]
 }
-func (myMap *myMap) addTarget(key int, value int) {
+func (myMap *myMap) addTarget(key int, value rpcResult) {
 	myMap.mu.Lock()
+	defer myMap.mu.Unlock()
+	if myMap.cnt[key] == 0 {
+		return
+	}
 	myMap.target[key] = value
-	myMap.mu.Unlock()
+
 }
 
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
-	rf      *raft.Raft
-	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
-
-	maxraftstate int // snapshot if log grows this big
+	mu           sync.Mutex
+	me           int
+	rf           *raft.Raft
+	applyCh      chan raft.ApplyMsg
+	dead         int32 // set by Kill()
+	maxraftstate int   // snapshot if log grows this big
 	myMap        myMap
+
+	state    map[string]string
+	ckAnswer map[int]rpcResult
+	ckCount  int
 	// Your definitions here.
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.-
+	var result rpcResult
+	result, has := kv.ckAnswer[args.ClerkID]
+	fmt.Println(kv.me, args.ClerkID, args.RpcID, args.Key)
+	if has && result.RpcID == args.RpcID {
+		//result in cache
+		if result.Value == "" {
+			reply.Err = ErrNoKey
+			reply.Value = ""
+		} else {
+			reply.Err = OK
+			reply.Value = result.Value
+		}
+	} else {
+
+		op := Op{Key: args.Key, Op: "Get", Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
+		index, _, isLeader := kv.rf.Start(op)
+		if !isLeader {
+			reply.Err = ErrWrongLeader
+			return
+		}
+		kv.myMap.add(index)
+		result := kv.myMap.wait(index)
+		if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
+			reply.Err = ErrWrongLeader
+		} else {
+			if result.Value == "" {
+				reply.Err = ErrNoKey
+				reply.Value = ""
+			} else {
+				reply.Err = OK
+				reply.Value = result.Value
+			}
+		}
+		kv.myMap.remove(index)
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	var result rpcResult
+	result, has := kv.ckAnswer[args.ClerkID]
+	if has && result.RpcID == args.RpcID {
+		reply.Err = OK
+	} else {
+		op := Op{Key: args.Key, Value: args.Value, Op: args.Op, Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
+		index, _, isLeader := kv.rf.Start(op)
+		if !isLeader {
+			reply.Err = ErrWrongLeader
+			return
+		}
+
+		kv.myMap.add(index)
+		result = kv.myMap.wait(index)
+		if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
+			reply.Err = ErrWrongLeader
+		} else {
+			reply.Err = OK
+		}
+		kv.myMap.remove(index)
+	}
 }
 
 //
@@ -116,6 +188,37 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) step(op Op) string {
+	if op.Op == "Append" {
+		kv.state[op.Key] += op.Value
+	} else if op.Op == "Put" {
+		kv.state[op.Key] = op.Value
+	} else if op.Op == "Get" {
+		if op.Key == "ClerkID" {
+			kv.ckCount++
+			kv.state[op.Key] = strconv.Itoa(kv.ckCount)
+		}
+	} else {
+		DPrintf("Error op")
+	}
+	return kv.state[op.Key]
+}
+
+func (kv *KVServer) read() {
+	for msg := range kv.applyCh {
+		kv.mu.Lock()
+		op := msg.Command.(Op)
+		value := kv.step(op)
+		index := msg.CommandIndex
+		rpcResult := rpcResult{Value: value, RpcID: op.RpcID, ClerkID: op.ClerkID, Me: op.Me}
+		if op.ClerkID != -1 {
+			kv.ckAnswer[op.ClerkID] = rpcResult
+		}
+		kv.myMap.addTarget(index, rpcResult)
+		kv.mu.Unlock()
+	}
 }
 
 //
@@ -145,7 +248,11 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.state = make(map[string]string)
+	kv.ckAnswer = make(map[int]rpcResult)
+	kv.ckCount = 0
 	kv.myMap.new()
+	go kv.read()
 	// You may need initialization code here.
 
 	return kv
