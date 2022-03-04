@@ -28,6 +28,7 @@ import (
 
 	"../labgob"
 	"../labrpc"
+	"../mytools/knocker"
 )
 
 // import "bytes"
@@ -409,11 +410,15 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	k := knocker.New()
+	k.Close()
+	k.Add(rf.me, 1, len(rf.logs))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	idx := -1
 	term := rf.currentTerm
 	isLeader := rf.state == 2
+	k.Add(rf.me, 2)
 	if isLeader {
 
 		rf.logs = append(rf.logs, LogEntry{Command: command, Term: term})
@@ -421,6 +426,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		rf.persist()
 
 	}
+	k.Add(rf.me, 3)
+	k.Close()
 	//fmt.Println(rf.me, rf.currentTerm, rf.state)
 	return idx, term, isLeader
 }

@@ -10,6 +10,7 @@ import (
 
 	"../labgob"
 	"../labrpc"
+	"../mytools/knocker"
 	"../raft"
 )
 
@@ -64,14 +65,16 @@ func (myMap *myMap) remove(key int) {
 	myMap.cnt[key]--
 	if myMap.cnt[key] == 0 {
 		delete(myMap.cnt, key)
-		delete(myMap.target, key)
+		//delete(myMap.target, key)
 	}
 	myMap.mu.Unlock()
 }
 func (myMap *myMap) wait(key int) rpcResult {
 	myMap.mu.Lock()
+	var rec rpcResult
+	var ok bool
 	for {
-		_, ok := myMap.target[key]
+		rec, ok = myMap.target[key]
 		if ok {
 			break
 		}
@@ -80,16 +83,13 @@ func (myMap *myMap) wait(key int) rpcResult {
 		myMap.mu.Lock()
 	}
 	myMap.mu.Unlock()
-	return myMap.target[key]
+	return rec
 }
 func (myMap *myMap) addTarget(key int, value rpcResult) {
 	myMap.mu.Lock()
 	defer myMap.mu.Unlock()
-	if myMap.cnt[key] == 0 {
-		return
-	}
 	myMap.target[key] = value
-
+	//fmt.Println("1", key)
 }
 
 type KVServer struct {
@@ -125,26 +125,32 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 			reply.Value = result.Value
 		}
 	}
-
+	k := knocker.New()
 	var result rpcResult
 	result, has := kv.ckAnswer[op.ClerkID]
-	// fmt.Println(kv.me, op.ClerkID, op.RpcID, op.Op, result.Status, has)
-	if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
+	k.Close()
+	k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 1)
+
+	fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
+	if false && has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
 		//result in cache
 		handleResult(&result)
-	} else if has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
+	} else if false && has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
 		reply.Err = Waiting
 	} else {
+		k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 2)
 		index, _, isLeader := kv.rf.Start(op)
-
+		k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 3)
 		if !isLeader {
 			reply.Err = ErrWrongLeader
 		} else {
-			fmt.Println(kv.me, op.ClerkID, op.RpcID, op.Op, result.Status, has)
+			k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 4)
+			//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
 			kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsuming"}
 			kv.mu.Unlock()
 			kv.myMap.add(index)
 			result := kv.myMap.wait(index)
+
 			kv.mu.Lock()
 			if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
 				reply.Err = ErrWrongLeader
@@ -153,9 +159,10 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 				handleResult(&result)
 			}
 			kv.myMap.remove(index)
+			k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 5)
 		}
 	}
-
+	k.Close()
 	return reply
 }
 

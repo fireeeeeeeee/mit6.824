@@ -1,15 +1,14 @@
 package main
 
-type node struct {
-	val int
-}
-
-func test(t *node) {
-	t.val = 2
-}
+import "fmt"
 
 func main() {
-	t := node{}
-	test(&t)
+	a := make(chan int)
+	select {
+	case a <- 1:
+		fmt.Println(1)
+	default:
+		fmt.Println(2)
+	}
 
 }
