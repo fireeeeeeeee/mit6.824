@@ -65,7 +65,7 @@ func (ck *Clerk) Get(key string) string {
 	reply := GetReply{}
 	l := len(ck.servers)
 	for i := 0; ; i++ {
-		fmt.Println("send:", ck.clerkID, ck.rpcID)
+		//fmt.Println("send:", ck.clerkID, ck.rpcID)
 		ok := ck.servers[i%l].Call("KVServer.Get", &args, &reply)
 		if ok {
 			if reply.Err == OK {
@@ -100,7 +100,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	reply := PutAppendReply{}
 	l := len(ck.servers)
 	for i := 0; ; i++ {
-		fmt.Println("send:", ck.clerkID, ck.rpcID)
+		//fmt.Println("send:", ck.clerkID, ck.rpcID)
 		ok := ck.servers[i%l].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
 			if reply.Err == OK {

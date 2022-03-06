@@ -279,6 +279,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) commitMsg(n int) {
 	//fmt.Println(rf.me, n, len(rf.logs))
+	k := knocker.New()
+	defer k.Close()
+	k.Add("commit:", rf.me)
 	if n > len(rf.logs) {
 		n = len(rf.logs)
 	}
@@ -412,7 +415,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntryArgs, reply *Appe
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	k := knocker.New()
 	k.Close()
-	k.Add(rf.me, 1, len(rf.logs))
+	k.Add(rf.me, 1, rf.state, len(rf.logs))
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	idx := -1

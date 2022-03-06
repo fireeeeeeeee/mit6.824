@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -131,7 +130,7 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 	k.Close()
 	k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 1)
 
-	fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
+	//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
 	if false && has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
 		//result in cache
 		handleResult(&result)
