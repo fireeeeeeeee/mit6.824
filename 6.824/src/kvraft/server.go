@@ -9,7 +9,6 @@ import (
 
 	"../labgob"
 	"../labrpc"
-	"../mytools/knocker"
 	"../raft"
 )
 
@@ -124,26 +123,22 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 			reply.Value = result.Value
 		}
 	}
-	k := knocker.New()
 	var result rpcResult
 	result, has := kv.ckAnswer[op.ClerkID]
-	k.Close()
-	k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 1)
 
 	//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
-	if false && has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
+	if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
 		//result in cache
 		handleResult(&result)
-	} else if false && has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
+	} else if has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
 		reply.Err = Waiting
 	} else {
-		k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 2)
+		kv.mu.Unlock()
 		index, _, isLeader := kv.rf.Start(op)
-		k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 3)
+		kv.mu.Lock()
 		if !isLeader {
 			reply.Err = ErrWrongLeader
 		} else {
-			k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 4)
 			//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
 			kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsuming"}
 			kv.mu.Unlock()
@@ -158,10 +153,8 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 				handleResult(&result)
 			}
 			kv.myMap.remove(index)
-			k.Add(kv.me, op.RpcID, op.ClerkID, op.Op, 5)
 		}
 	}
-	k.Close()
 	return reply
 }
 

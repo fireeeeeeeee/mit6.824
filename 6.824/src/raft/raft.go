@@ -281,6 +281,7 @@ func (rf *Raft) commitMsg(n int) {
 	//fmt.Println(rf.me, n, len(rf.logs))
 	k := knocker.New()
 	defer k.Close()
+	k.Close()
 	k.Add("commit:", rf.me)
 	if n > len(rf.logs) {
 		n = len(rf.logs)
