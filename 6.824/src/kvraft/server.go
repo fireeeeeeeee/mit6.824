@@ -43,9 +43,10 @@ type rpcResult struct {
 }
 
 type myMap struct {
-	mu     sync.Mutex
-	target map[int]rpcResult
-	cnt    map[int]int
+	mu       sync.Mutex
+	target   map[int]rpcResult
+	cnt      map[int]int
+	commited int
 }
 
 func (myMap *myMap) new() {
@@ -53,17 +54,23 @@ func (myMap *myMap) new() {
 	myMap.target = make(map[int]rpcResult)
 }
 
-func (myMap *myMap) add(key int) {
+func (myMap *myMap) add(key int) bool {
 	myMap.mu.Lock()
+	defer myMap.mu.Unlock()
+	_, ok := myMap.target[key]
+	if key <= myMap.commited && !ok {
+		return false
+	}
 	myMap.cnt[key]++
-	myMap.mu.Unlock()
+	return true
+
 }
 func (myMap *myMap) remove(key int) {
 	myMap.mu.Lock()
 	myMap.cnt[key]--
 	if myMap.cnt[key] == 0 {
 		delete(myMap.cnt, key)
-		//delete(myMap.target, key)
+		delete(myMap.target, key)
 	}
 	myMap.mu.Unlock()
 }
@@ -87,6 +94,7 @@ func (myMap *myMap) addTarget(key int, value rpcResult) {
 	myMap.mu.Lock()
 	defer myMap.mu.Unlock()
 	myMap.target[key] = value
+	myMap.commited = key
 	//fmt.Println("1", key)
 }
 
@@ -127,7 +135,10 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 	result, has := kv.ckAnswer[op.ClerkID]
 
 	//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
-	if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
+
+	if has && result.RpcID > op.RpcID {
+		handleResult(&result)
+	} else if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
 		//result in cache
 		handleResult(&result)
 	} else if has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
@@ -142,11 +153,13 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 			//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
 			kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsuming"}
 			kv.mu.Unlock()
-			kv.myMap.add(index)
-			result := kv.myMap.wait(index)
 
+			ok := kv.myMap.add(index)
+			if ok {
+				result = kv.myMap.wait(index)
+			}
 			kv.mu.Lock()
-			if result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
+			if !ok || result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
 				reply.Err = ErrWrongLeader
 				kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsume Fail"}
 			} else {
