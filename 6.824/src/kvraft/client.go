@@ -13,8 +13,10 @@ import (
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
-	clerkID int
-	rpcID   int
+	clerkID        int
+	rpcID          int
+	useLeaderCache bool //good for efficient ,but not good for debug
+	preLeader      int
 }
 
 func nrand() int64 {
@@ -29,6 +31,8 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	ck.rpcID = 0
 	ck.clerkID = 0
+	ck.useLeaderCache = true
+	ck.preLeader = 0
 	// You'll have to add code here.
 	return ck
 }
@@ -64,16 +68,21 @@ func (ck *Clerk) Get(key string) string {
 	args := GetArgs{Key: key, ClerkID: ck.clerkID, RpcID: ck.rpcID}
 	reply := GetReply{}
 	l := len(ck.servers)
-	for i := 0; ; i++ {
+	for i := ck.preLeader; ; i++ {
 		//fmt.Println("send:", ck.clerkID, ck.rpcID)
 		ok := ck.servers[i%l].Call("KVServer.Get", &args, &reply)
 		if ok {
-			if reply.Err == OK {
-				return reply.Value
-			} else if reply.Err == ErrNoKey {
-				return ""
-			} else if reply.Err == Waiting {
+			if reply.Err == Waiting {
 				time.Sleep(time.Millisecond * 100)
+			} else {
+				if ck.useLeaderCache {
+					ck.preLeader = i % l
+				}
+				if reply.Err == OK {
+					return reply.Value
+				} else if reply.Err == ErrNoKey {
+					return ""
+				}
 			}
 
 		}
@@ -99,15 +108,21 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	args := PutAppendArgs{Key: key, Value: value, Op: op, ClerkID: ck.clerkID, RpcID: ck.rpcID}
 	reply := PutAppendReply{}
 	l := len(ck.servers)
-	for i := 0; ; i++ {
+	for i := ck.preLeader; ; i++ {
 		//fmt.Println("send:", ck.clerkID, ck.rpcID)
 		ok := ck.servers[i%l].Call("KVServer.PutAppend", &args, &reply)
 		if ok {
-			if reply.Err == OK {
-				return
-			} else if reply.Err == Waiting {
+			if reply.Err == Waiting {
 				time.Sleep(time.Millisecond * 100)
+			} else {
+				if ck.useLeaderCache {
+					ck.preLeader = i % l
+				}
+				if reply.Err == OK {
+					break
+				}
 			}
+
 		}
 	}
 }

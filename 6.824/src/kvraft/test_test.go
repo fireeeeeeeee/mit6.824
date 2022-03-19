@@ -86,6 +86,7 @@ func checkClntAppends(t *testing.T, clnt int, v string, count int) {
 			t.Fatalf("%v missing element %v in Append result %v", clnt, wanted, v)
 		}
 		off1 := strings.LastIndex(v, wanted)
+		fmt.Println(off, off1)
 		if off1 != off {
 			t.Fatalf("duplicate element %v in Append result", wanted)
 		}
@@ -192,7 +193,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 		clnts[i] = make(chan int)
 	}
 	for i := 0; i < 3; i++ {
-		// log.Printf("Iteration %v\n", i)
+		log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
 		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {

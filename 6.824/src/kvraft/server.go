@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -120,6 +121,7 @@ type myReply struct {
 
 func (kv *KVServer) handleOPs(op Op) myReply {
 	kv.mu.Lock()
+	fmt.Println(kv.state)
 	defer kv.mu.Unlock()
 	reply := myReply{}
 	handleResult := func(result *rpcResult) {
