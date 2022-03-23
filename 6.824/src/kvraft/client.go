@@ -75,7 +75,7 @@ func (ck *Clerk) Get(key string) string {
 			if reply.Err == Waiting {
 				time.Sleep(time.Millisecond * 100)
 			} else {
-				if ck.useLeaderCache {
+				if ck.useLeaderCache && reply.Err != ErrWrongLeader {
 					ck.preLeader = i % l
 				}
 				if reply.Err == OK {
@@ -115,7 +115,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			if reply.Err == Waiting {
 				time.Sleep(time.Millisecond * 100)
 			} else {
-				if ck.useLeaderCache {
+				if ck.useLeaderCache && reply.Err != ErrWrongLeader {
 					ck.preLeader = i % l
 				}
 				if reply.Err == OK {

@@ -1,8 +1,8 @@
 package kvraft
 
 import (
-	"fmt"
 	"log"
+	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -37,67 +37,66 @@ type Op struct {
 
 type rpcResult struct {
 	Value   string
-	Status  string
 	Me      int
 	RpcID   int
 	ClerkID int
 }
 
-type myMap struct {
-	mu       sync.Mutex
-	target   map[int]rpcResult
-	cnt      map[int]int
-	commited int
-}
+// type myMap struct {
+// 	mu       sync.Mutex
+// 	target   map[int]rpcResult
+// 	cnt      map[int]int
+// 	commited int
+// }
 
-func (myMap *myMap) new() {
-	myMap.cnt = make(map[int]int)
-	myMap.target = make(map[int]rpcResult)
-}
+// func (myMap *myMap) new() {
+// 	myMap.cnt = make(map[int]int)
+// 	myMap.target = make(map[int]rpcResult)
+// }
 
-func (myMap *myMap) add(key int) bool {
-	myMap.mu.Lock()
-	defer myMap.mu.Unlock()
-	_, ok := myMap.target[key]
-	if key <= myMap.commited && !ok {
-		return false
-	}
-	myMap.cnt[key]++
-	return true
+// func (myMap *myMap) add(key int) bool {
+// 	myMap.mu.Lock()
+// 	defer myMap.mu.Unlock()
+// 	_, ok := myMap.target[key]
+// 	if key <= myMap.commited && !ok {
+// 		return false
+// 	}
+// 	myMap.cnt[key]++
+// 	return true
 
-}
-func (myMap *myMap) remove(key int) {
-	myMap.mu.Lock()
-	myMap.cnt[key]--
-	if myMap.cnt[key] == 0 {
-		delete(myMap.cnt, key)
-		delete(myMap.target, key)
-	}
-	myMap.mu.Unlock()
-}
-func (myMap *myMap) wait(key int) rpcResult {
-	myMap.mu.Lock()
-	var rec rpcResult
-	var ok bool
-	for {
-		rec, ok = myMap.target[key]
-		if ok {
-			break
-		}
-		myMap.mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
-		myMap.mu.Lock()
-	}
-	myMap.mu.Unlock()
-	return rec
-}
-func (myMap *myMap) addTarget(key int, value rpcResult) {
-	myMap.mu.Lock()
-	defer myMap.mu.Unlock()
-	myMap.target[key] = value
-	myMap.commited = key
-	//fmt.Println("1", key)
-}
+// }
+// func (myMap *myMap) remove(key int) {
+// 	myMap.mu.Lock()
+// 	myMap.cnt[key]--
+// 	if myMap.cnt[key] == 0 {
+// 		delete(myMap.cnt, key)
+// 		delete(myMap.target, key)
+// 	}
+// 	myMap.mu.Unlock()
+// }
+// func (myMap *myMap) wait(key int) rpcResult {
+// 	myMap.mu.Lock()
+// 	var rec rpcResult
+// 	var ok bool
+// 	for {
+// 		rec, ok = myMap.target[key]
+// 		if ok {
+// 			break
+// 		}
+// 		myMap.mu.Unlock()
+// 		time.Sleep(10 * time.Millisecond)
+// 		myMap.mu.Lock()
+// 	}
+// 	myMap.mu.Unlock()
+// 	return rec
+// }
+// func (myMap *myMap) addTarget(key int, value rpcResult) {
+// 	myMap.mu.Lock()
+// 	defer myMap.mu.Unlock()
+// 	myMap.target[key] = value
+// 	myMap.commited = key
+// 	//fmt.Println("1", key)
+// }
 
 type KVServer struct {
 	mu           sync.Mutex
@@ -106,11 +105,13 @@ type KVServer struct {
 	applyCh      chan raft.ApplyMsg
 	dead         int32 // set by Kill()
 	maxraftstate int   // snapshot if log grows this big
-	myMap        myMap
 
-	state    map[string]string
-	ckAnswer map[int]rpcResult
-	ckCount  int
+	state      map[string]string
+	ckAnswer   map[int]rpcResult // 从raft中获得到的某个client的最后一条信息
+	ckCount    int               //client 数量
+	lastCommit map[int]int       //用于优化rpc突然断开的情况
+	commited   int
+
 	// Your definitions here.
 }
 
@@ -121,7 +122,6 @@ type myReply struct {
 
 func (kv *KVServer) handleOPs(op Op) myReply {
 	kv.mu.Lock()
-	fmt.Println(kv.state)
 	defer kv.mu.Unlock()
 	reply := myReply{}
 	handleResult := func(result *rpcResult) {
@@ -135,16 +135,12 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 	}
 	var result rpcResult
 	result, has := kv.ckAnswer[op.ClerkID]
-
-	//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
-
 	if has && result.RpcID > op.RpcID {
+		//this rpc must be failed , it's fine to return anything
 		handleResult(&result)
-	} else if has && result.RpcID == op.RpcID && result.Status == "Finish" && result.ClerkID != -1 {
+	} else if has && result.RpcID == op.RpcID {
 		//result in cache
 		handleResult(&result)
-	} else if has && result.RpcID == op.RpcID && result.Status == "Comsuming" {
-		reply.Err = Waiting
 	} else {
 		kv.mu.Unlock()
 		index, _, isLeader := kv.rf.Start(op)
@@ -152,28 +148,37 @@ func (kv *KVServer) handleOPs(op Op) myReply {
 		if !isLeader {
 			reply.Err = ErrWrongLeader
 		} else {
-			//fmt.Println(kv.me, op.RpcID, op.ClerkID, op.Op, result.Status, has)
-			kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsuming"}
-			kv.mu.Unlock()
-
-			ok := kv.myMap.add(index)
-			if ok {
-				result = kv.myMap.wait(index)
+			ok := false
+			for {
+				if kv.commited > index {
+					break
+				}
+				kv.mu.Unlock()
+				time.Sleep(10 * time.Millisecond)
+				kv.mu.Lock()
 			}
-			kv.mu.Lock()
-			if !ok || result.RpcID != op.RpcID || result.ClerkID != op.ClerkID || result.Me != op.Me {
+			result, ok = kv.ckAnswer[op.ClerkID]
+			if !ok || kv.ckAnswer[op.ClerkID].RpcID != op.RpcID {
 				reply.Err = ErrWrongLeader
-				kv.ckAnswer[op.ClerkID] = rpcResult{RpcID: op.RpcID, Status: "Comsume Fail"}
 			} else {
 				handleResult(&result)
 			}
-			kv.myMap.remove(index)
 		}
 	}
 	return reply
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	if args.Key == "ClerkID" {
+
+		kv.mu.Lock()
+		defer kv.mu.Unlock()
+		kv.ckCount++
+		reply.Err = OK
+		reply.Value = strconv.Itoa(rand.Intn(100000000))
+		return
+	}
+
 	op := Op{Key: args.Key, Op: "Get", Me: kv.me, RpcID: args.RpcID, ClerkID: args.ClerkID}
 	myReply := kv.handleOPs(op)
 	reply.Err = myReply.Err
@@ -212,35 +217,35 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-func (kv *KVServer) step(op Op) string {
+func (kv *KVServer) step(op Op) {
 	if op.Op == "Emp" {
-		return ""
+		return
+	}
+
+	preRpcresult, ok := kv.ckAnswer[op.ClerkID]
+	if ok && preRpcresult.RpcID == op.RpcID {
+		return
 	}
 	if op.Op == "Append" {
 		kv.state[op.Key] += op.Value
 	} else if op.Op == "Put" {
 		kv.state[op.Key] = op.Value
 	} else if op.Op == "Get" {
-		if op.Key == "ClerkID" {
-			kv.ckCount++
-			kv.state[op.Key] = strconv.Itoa(kv.ckCount)
-		}
+
 	} else {
 		DPrintf("Error op")
 	}
-	return kv.state[op.Key]
+	rpcResult := rpcResult{Value: kv.state[op.Key], RpcID: op.RpcID, ClerkID: op.ClerkID, Me: op.Me}
+	kv.ckAnswer[op.ClerkID] = rpcResult
 }
 
 func (kv *KVServer) read() {
 	for msg := range kv.applyCh {
 		kv.mu.Lock()
 		op := msg.Command.(Op)
-		value := kv.step(op)
+		kv.step(op)
 		index := msg.CommandIndex
-		rpcResult := rpcResult{Value: value, RpcID: op.RpcID, ClerkID: op.ClerkID, Me: op.Me, Status: "Finish"}
-
-		kv.ckAnswer[op.ClerkID] = rpcResult
-		kv.myMap.addTarget(index, rpcResult)
+		kv.commited = index + 1
 		kv.mu.Unlock()
 	}
 }
@@ -273,7 +278,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
@@ -285,7 +289,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.state = make(map[string]string)
 	kv.ckAnswer = make(map[int]rpcResult)
 	kv.ckCount = 0
-	kv.myMap.new()
+	kv.lastCommit = make(map[int]int)
+	kv.commited = 0
 	go kv.read()
 	go kv.heartBeat()
 	// You may need initialization code here.
